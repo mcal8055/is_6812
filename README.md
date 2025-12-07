@@ -1,168 +1,180 @@
-title: "Home Credit Default Risk Modeling"
+# Home Credit Default Risk Modeling
 
-business_problem_and_objective: |
-  Home Credit is a global lender serving many applicants without traditional credit histories.
-  These "unbanked" customers represent both a growth opportunity and a source of credit risk.
+**Group 4 – Corinn Childs, Gaby Rodriguez, Joel Jorgensen, Josh McAlister**
 
-  Business problem:
-  Home Credit needs a reliable way to estimate the probability that a loan applicant will default,
-  using all available application and transaction data.
+Home Credit is a global lender that serves many applicants without traditional credit histories.  
+These “unbanked” customers represent both:
 
-  Project objective:
-  Build and deploy a probability-of-default (PD) model that:
-    - assigns each applicant a PD score,
-    - supports data-driven approve/decline/review decisions, and
-    - quantifies the trade-off between profit and expected credit losses.
+- **Growth opportunity** – new borrowers in underserved markets  
+- **Credit risk** – higher uncertainty around ability to repay
 
-solution_overview: |
-  We framed the task as a binary classification problem (default vs non-default, ~8% default rate)
-  and built a gradient boosted decision tree model (XGBoost) on a unified, engineered dataset.
+Our goal in this project is to build a **probability-of-default (PD) model** that helps Home Credit:
 
-  Data preparation (R + tidymodels):
-    - Joined the main application data with four auxiliary sources:
-        * Bureau data (external credit history)
-        * Installment payments
-        * Credit card balances
-        * POS & cash loan balances
-    - Dropped features with >50% missing values, except EXT_SOURCE_1 (external credit score).
-    - Aggregated transactional tables to the customer level (mins, maxes, averages, sums, ratios).
-    - Created missing-value indicator flags, then used median/mode imputation.
-    - Log-transformed heavily skewed variables (e.g., income) and normalized numeric features.
-    - One-hot encoded categorical variables and removed zero-variance predictors via a reusable recipe.
+- Assess default risk at the **individual applicant** level  
+- Make better **approve / decline / manual review** decisions  
+- Balance **profit** from good loans against **losses** from bad ones  
 
-  Modeling (Gradient Boosting / XGBoost):
-    - Handled class imbalance by down-sampling the majority class to a 2:1 ratio.
-    - Fit an XGBoost model with reasonable tree depth, number of trees, learning rate, and subsampling.
-    - Used stratified cross-validation to evaluate performance with ROC-AUC, PR-AUC, accuracy,
-      precision, recall, specificity, F1, and Brier score.
-    - Trained the final model on the down-sampled training data and scored:
-        * a holdout set for internal validation, and
-        * the Kaggle test set to generate competition submissions.
+---
 
-gbm_results: |
-  Internal holdout performance (threshold = 0.5):
-    - ROC-AUC: ~0.77
-    - PR-AUC: ~0.26
-    - Accuracy: ~0.84
-    - Precision: ~0.95
-    - Recall: ~0.87
-    - Specificity: ~0.48
-    - F1 Score: ~0.91
+## Business Problem
 
-  Confusion-matrix interpretation:
-    - High precision: most applicants flagged as high risk truly are high risk, minimizing
-      unnecessary declines and manual reviews.
-    - Strong recall: the model captures the majority of true defaulters, reducing credit losses.
-    - Improved specificity vs more aggressive settings, preserving more low-risk approvals.
+Home Credit needs a reliable way to estimate:  
+> *“What is the probability this applicant will default if we approve their loan?”*
 
-  Kaggle Home Credit competition:
-    - Public AUC: 0.7597
-    - Private AUC: 0.7669
+The challenge is that defaults are **rare events (~8%)**, and information about applicants is spread across:
 
-  These scores closely match the holdout ROC-AUC, indicating that the gradient boosting model
-  generalizes well and is not overfit to the training data.
+- Application data
+- Credit bureau records
+- Installment loan history
+- Credit card behavior
+- POS & cash loan balances
 
-business_value: |
-  The gradient boosting solution delivers business value by:
+A successful solution must **combine these data sources**, handle missingness and imbalance, and produce **calibrated risk scores** that can be plugged into real credit policy.
 
-    - Risk stratification:
-        * Each applicant receives a calibrated probability of default.
-        * Credit policy can define PD thresholds for auto-approve, auto-decline, or manual review.
+---
 
-    - Economic optimization:
-        * Using Platt-scaled probabilities, we built a synthetic cost table that simulates
-          approvals, defaults, expected loss, expected profit, and net value per 1,000 applicants
-          across different PD thresholds.
-        * Risk and Product teams can choose the threshold that maximizes net economic value
-          instead of relying on arbitrary cutoffs.
+## Our Solution: Gradient Boosted Trees (XGBoost)
 
-    - Better use of behavioral data:
-        * An ablation experiment showed that including transaction-level features along with
-          application data improves ROC-AUC and Brier score.
-        * This supports further investment in data integration and behavioral signals.
+We framed the problem as a **binary classification** task (default vs non-default) and built a **gradient boosted decision tree model (XGBoost)** on a unified engineered dataset.
 
-    - Operational readiness:
-        * A single, scripted pipeline (recipes + XGBoost) makes the model reproducible and
-          easier to monitor, document, and deploy in a production scoring environment.
+### Data Preparation
 
-my_contribution_josh_mcalister: |
-  My primary contributions to the project were:
+Using R and `tidymodels`, we:
 
-    - Modeling R&D around complex learners:
-        * Implemented and tuned neural network models (using brulee) on the cleaned feature set.
-        * Experimented with hyperparameters (hidden units, dropout, learning rate) to understand
-          when deep models provide incremental value over tree-based approaches.
-        * Built and evaluated an ensemble stack that combined XGBoost and neural nets, using a
-          logistic regression meta-learner (caretStack).
+- Joined application data with four auxiliary tables:
+  - **Bureau** (external credit history)
+  - **Installments** (loan repayment behavior)
+  - **Credit card** balances and payments
+  - **POS & cash loans**  
+- Dropped features with **>50% missing values**, except `EXT_SOURCE_1` (an important external credit score)
+- Aggregated transactional tables to the **customer level** (mins, maxes, means, sums, ratios)
+- Created **missing-value indicator flags**, then:
+  - Imputed numeric variables with **medians**
+  - Imputed categorical variables with **modes**
+- Applied:
+  - **Log transform** to heavily skewed fields (e.g., income)  
+  - **Normalization** of numeric predictors  
+  - **One-hot encoding** for categorical features  
+  - Removal of **zero-variance** predictors  
 
-    - Evidence for selecting GBM as the winning approach:
-        * Showed that, under our compute constraints, the stacked ensemble and neural networks
-          did not materially outperform the gradient boosting model in ROC-AUC or PR-AUC.
-        * Helped position XGBoost as the best balance of performance, stability, and
-          deployability for this business use case.
+All of this was implemented as a **reusable recipe**, so the exact same steps are applied to training, holdout, and Kaggle test data.
 
-    - Communication and interpretability:
-        * Contributed to the interpretation of GBM metrics (precision, recall, specificity, PR-AUC)
-          in business terms—how many defaulters we catch vs how many good applicants we might flag.
-        * Helped translate technical performance into interview-ready talking points about
-          threshold selection, calibration, and portfolio impact.
+### Handling Class Imbalance
 
-difficulties_encountered: |
-  Key challenges in the GBM-focused workflow:
+Because only ~8% of applicants default, a naive model can look “accurate” by predicting everyone as safe. To avoid this:
 
-    - Class imbalance:
-        * With only ~8% defaults, naive models could achieve high accuracy by predicting
-          "non-default" for most applicants.
-        * We mitigated this by down-sampling, focusing on PR-AUC and recall, and analyzing
-          confusion matrices rather than accuracy alone.
+- We **down-sampled the majority class** so the training data had roughly a **2:1** ratio of non-default to default
+- We evaluated models using metrics suited to imbalance:
+  - ROC-AUC
+  - PR-AUC
+  - Precision, recall, specificity
+  - F1 and Brier score  
+  - Threshold-based confusion matrices
 
-    - Data complexity:
-        * Joining five datasets, aggregating transactions, and one-hot encoding produced a
-          large, sparse feature space.
-        * We addressed this with a tidymodels recipe that standardized imputation, scaling,
-          and feature selection, and ensured the same steps applied to training, holdout,
-          and Kaggle test data.
+### Model Training & Evaluation
 
-    - Threshold and calibration:
-        * A fixed 0.5 threshold is not automatically optimal for profit.
-        * Platt scaling plus the synthetic cost table helped connect model scores to business
-          outcomes and guided a more principled threshold choice.
+We trained an XGBoost model on the down-sampled dataset using:
 
-lessons_learned: |
-  From this project we learned:
+- Moderate tree depth and number of trees
+- A conservative learning rate
+- Row and column subsampling to improve generalization
 
-    - How to design an end-to-end, production-style credit risk pipeline:
-        * ingestion, feature engineering, modeling, evaluation, and deployment artifacts
-          (Kaggle submissions).
+Performance was assessed via **stratified cross-validation** and a **strict holdout set**, then validated externally through **Kaggle submissions**.
 
-    - The importance of class imbalance handling and proper metrics:
-        * ROC-AUC alone is not enough; PR-AUC, precision/recall, and cost-based analysis are
-          critical in rare-event settings like default prediction.
+---
 
-    - Why gradient boosting is often a strong baseline for tabular data:
-        * It captures non-linear interactions and handles mixed feature types while remaining
-          more stable and easier to deploy than heavier deep learning or stacked ensembles.
+## Model Performance & Business Impact
 
-    - How to frame model performance for business stakeholders:
-        * Turning confusion matrices and thresholds into clear statements about expected
-          defaults avoided, good customers approved, and net economic impact.
+### Holdout Performance (Threshold = 0.5)
 
-repo_structure_and_usage: |
-  Suggested repository layout:
+On the internal holdout set, our chosen XGBoost model achieved approximately:
 
-    - data/              : Kaggle Home Credit CSV files
-    - notebooks_or_qmd/  : main Quarto or R Markdown file with the full pipeline
-    - models/            : saved GBM model objects and calibration artifacts
-    - submission.csv     : final Kaggle submission generated by the GBM model
+- **ROC-AUC:** 0.77  
+- **PR-AUC:** 0.26  
+- **Accuracy:** 0.84  
+- **Precision:** 0.95  
+- **Recall:** 0.87  
+- **Specificity:** 0.48  
+- **F1 Score:** 0.91  
 
-  To reproduce the winning GBM approach:
+**Interpretation:**
 
-    1) Download the Home Credit Default Risk competition data from Kaggle and place the files in data/.
-    2) Open the main Quarto/R Markdown analysis in RStudio.
-    3) Install required R packages (tidyverse, tidymodels, xgboost, probably, etc.).
-    4) Knit/render the document to:
-         - load and join the datasets,
-         - run the preprocessing recipe,
-         - train the down-sampled XGBoost model,
-         - apply Platt scaling and generate the cost table, and
-         - write submission.csv with predicted default probabilities.
+- **High precision (0.95)**  
+  When the model flags someone as high risk, it is usually correct. This reduces unnecessary declines and manual reviews.
+
+- **Strong recall (0.87)**  
+  The model catches most true defaulters, helping to avoid costly bad loans.
+
+- **Improved specificity (~0.48)**  
+  Compared to more aggressive configurations, this preserves more **good customers** in the approval pipeline.
+
+### Kaggle Benchmark
+
+We submitted the model to the **Home Credit Default Risk** competition:
+
+- **Public AUC:** 0.7597  
+- **Private AUC:** 0.7669  
+
+These results are closely aligned with our internal ROC-AUC, which:
+
+- Confirms that the model **generalizes well**  
+- Suggests limited **overfitting** to our local validation data  
+
+### Business Value
+
+The gradient boosting solution creates value by:
+
+1. **Risk Stratification**
+
+   - Every applicant receives a **probability of default**  
+   - Credit policy can map ranges of PD to:
+     - Auto-approve
+     - Auto-decline
+     - Manual review
+
+2. **Economic Optimization via Thresholds**
+
+   - We applied **Platt scaling** (logistic calibration) to better align predicted PDs with observed default rates.
+   - Using these calibrated scores, we built a **synthetic cost table** that estimates, per 1,000 applications:
+     - Approvals
+     - Defaults among approved loans
+     - Expected **loss** from bad loans
+     - Expected **profit** from good loans
+     - **Net economic value**  
+
+   This allows Risk and Product teams to choose a **decision threshold** that maximizes net value, instead of using an arbitrary 0.5 cutoff.
+
+3. **Better Use of Behavioral Data**
+
+   - An ablation comparison showed that including transactional and bureau data **improves ROC-AUC and Brier score** over using application data alone.
+   - This supports further investment in integrating **behavioral and credit history** signals into the decisioning process.
+
+---
+
+## My Contribution – Josh McAlister
+
+In addition to contributing to overall project discussions and documentation, my main responsibilities were:
+
+### 1. Modeling R&D Around Complex Learners
+
+- Implemented and tuned **neural network models** using `brulee` on the engineered feature set.
+- Designed and ran grid searches over:
+  - Hidden units
+  - Dropout
+  - Learning rate  
+- Evaluated neural network performance against gradient boosting to understand:
+  - Where deep learning might add value
+  - When it becomes **computationally expensive** without clear gains
+
+### 2. Ensemble (Stacking) Scaffold
+
+- Built a **stacked ensemble** using `caret` that combined:
+  - The XGBoost model  
+  - The neural network  
+  - A logistic regression meta-model on top (`caretStack`)
+- Addressed compute constraints by:
+  - Sub-sampling the training data
+  - Reducing the number of CV folds
+  - Simplifying neural net architecture  
+- Showed empirically that, under our hardware and time constraints, the ensemble **did not materially outperform** the standalone XGBoost model in ROC-AUC or PR-AUC.
+---
