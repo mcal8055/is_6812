@@ -164,3 +164,7 @@ In addition to contributing to overall project discussions and documentation, my
 - Evaluated neural network performance against gradient boosting to understand:
   - Where deep learning might add value
   - When it becomes **computationally expensive** without clear gains
+ 
+## Repository Guide
+- 'EDA.rmd' - initial exploratory data notebook
+- 'recipe_nn.rmd' - Neural network code with necessary recipe prep code
