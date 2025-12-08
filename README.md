@@ -68,7 +68,7 @@ Because only ~8% of applicants default, a naive model can look “accurate” by
   - ROC-AUC
   - PR-AUC
   - Precision, recall, specificity
-  - F1 and Brier score  
+  - Brier score  
   - Threshold-based confusion matrices
 
 ### Model Training & Evaluation
@@ -95,7 +95,6 @@ On the internal holdout set, our chosen XGBoost model achieved approximately:
 - **Precision:** 0.95  
 - **Recall:** 0.87  
 - **Specificity:** 0.48  
-- **F1 Score:** 0.91  
 
 **Interpretation:**
 
