@@ -1,0 +1,699 @@
+---
+title: "Individual Code"
+author: "Josh McAlister"
+date: "`r Sys.Date()`"
+output: html_document
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-title: "Contents"
+    embed-resources: true
+execute:
+  include: true
+  eval: true    
+  warning: false
+  message: false
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+```{r library}
+pacman::p_load(tidyverse, caret, janitor, skimr, recipes, themis, rlang, tidymodels, here, AppliedPredictiveModeling, brulee, torch, pROC,yardstick,tibble, glmnet, randomForest, tidymodels, xgboost, caretEnsemble)
+```
+
+```{r load data application train}
+#load file - assumes you have copy of file in working directory
+hc_train <- read.csv(here::here("data", "application_train.csv"), stringsAsFactors = TRUE)
+
+#standardize variable names
+hc_train <- hc_train |>
+  rename_with(tolower)
+
+#convert target and select numeric indicators to factors
+hc_train <- hc_train |>
+  mutate(
+    target = as.factor(target),
+    across(starts_with("flag"),as.factor),
+    across(starts_with("reg_"),as.factor),
+    across(starts_with("live_"),as.factor)
+    )
+
+```
+
+```{r load data bureau}
+#load file - assumes you have copy of file in working directory
+bureau_data <- read.csv(here::here("data", "bureau.csv"), stringsAsFactors = TRUE)
+
+#standardize variable names
+bureau_data <- bureau_data |>
+  rename_with(tolower)
+
+```
+
+```{r load data installment}
+#load file - assumes you have copy of file in working directory
+installment_data <- read.csv(here::here("data", "installments_payments.csv"), stringsAsFactors = TRUE)
+
+#standardize variable names
+installment_data <- installment_data |>
+  rename_with(tolower)
+
+```
+
+```{r load credit card data}
+#load file - assumes you have copy of file in working directory
+credit_card_data <- read.csv(here::here("data","credit_card_balance.csv"), stringsAsFactors = TRUE)
+
+#filter to only include selected columns
+credit_card_data <- credit_card_data |>
+  select(
+    SK_ID_CURR,
+    MONTHS_BALANCE,
+    AMT_BALANCE,
+    AMT_CREDIT_LIMIT_ACTUAL,
+    AMT_INST_MIN_REGULARITY,
+    AMT_PAYMENT_CURRENT,
+    AMT_PAYMENT_TOTAL_CURRENT,
+    SK_DPD
+  )
+```
+
+```{r load pos bal data}
+#load file - assumes you have copy of file in working directory
+pos_cash_data <- read.csv(here::here("data","POS_CASH_balance.csv"), stringsAsFactors = TRUE)
+
+#filter to only include selected columns
+pos_cash_data <- pos_cash_data |>
+  select(SK_ID_CURR,
+         MONTHS_BALANCE,
+         CNT_INSTALMENT,
+         CNT_INSTALMENT_FUTURE,
+         SK_DPD
+  )
+```
+
+# Data Cleaning and Preparation
+
+For application data a few initial preparation steps were completed.
+First, we removed any columns where over half of the data was missing,
+with one exception of ext_source_1 which \~56% was missing. For the
+dropped columns with so much missing we would likely be creating more
+noise by trying to impute values for all the missing data. Also, the
+columns removed don’t appear to be that relevant, for example a good
+portion are characteristics about the building a person lives in. The
+exception was made for ext_source_1 which is a credit score metric and
+likely has predictive power. Outliers were evaluated and only one data
+point needed to be removed, for an individual with an income over 100
+million, all other rows were left intact.
+
+Four additional sources were brought in they are as follows.
+
+-   **Credit Bureau -** All client's previous credits provided by other
+    financial institutions that were reported to Credit Bureau
+
+-   **Installment Loan -** Repayment history for the previously
+    disbursed credits in Home Credit related to the loans in our sample.
+
+-   **Credit Card -** Monthly balance snapshots of previous credit cards
+    that the applicant has with Home Credit
+
+-   **Point of Sales and Cash Loans -** Monthly balance snapshots of
+    previous POS (point of sales) and cash loans that the applicant had
+    with Home Credit.
+
+## Additional Data Source Preperation
+
+For the below four data sets, if data existed for a client it often had
+several rows, to account for this in each data set select data metrics
+were aggregated at a customer level. These were various min, max,
+summed, average and difference values. For each data set quite a few
+where metrics were compiled for the available data points, so the exact
+details won’t be discussed.
+
+### Bureau Data
+
+```{r created aggregated bureau data}
+#creates new data frame of aggregated bureau data
+bureau_agg <- bureau_data |>
+    group_by(sk_id_curr) |>
+    summarise(
+      bur_n_loans = n(),
+      #status counts
+      bur_n_active       = sum(credit_active == "Active", na.rm = TRUE),
+      bur_n_closed       = sum(credit_active == "Closed", na.rm = TRUE),
+      #min/max days since credit application
+      bur_min_days_credit = suppressWarnings(min(days_credit, na.rm = TRUE)),
+      bur_max_days_credit = suppressWarnings(max(days_credit, na.rm = TRUE)),
+      #amount aggregates
+      bur_sum_credit_sum     = sum(amt_credit_sum, na.rm = TRUE),
+      bur_sum_credit_debt    = sum(amt_credit_sum_debt, na.rm = TRUE),
+      bur_sum_credit_overdue = sum(amt_credit_sum_overdue, na.rm = TRUE),
+      bur_sum_credit_limit   = sum(amt_credit_sum_limit, na.rm = TRUE),
+      #max overdue
+      bur_max_amt_credit_max_overdue = suppressWarnings(max(amt_credit_max_overdue, na.rm = TRUE)),
+      #credit type counts
+      bur_n_mortgage         = sum(credit_type == "Mortgage", na.rm = TRUE),
+      bur_n_auto             = sum(credit_type == "Car loan", na.rm = TRUE),
+      bur_n_consumer_credit  = sum(credit_type == "Consumer credit", na.rm = TRUE),
+      bur_n_credit_card      = sum(credit_type == "Credit card", na.rm = TRUE),
+      .groups = "drop"
+    )
+#removes infinity values created from min/max functions and changes to 0, INF and - INF occur if min/max is ran on NA values
+bureau_agg <- bureau_agg |> mutate(across(where(is.numeric), ~ ifelse(is.infinite(.x), NA_real_, .x)))
+#replace any remaining NA from aggregation with 0
+bureau_agg <- bureau_agg |>
+  mutate(across(where(is.numeric), ~ replace_na(.x, 0)))
+
+# check for any remaining NAs - none
+#bureau_agg |>
+  #filter(if_any(everything(), is.na))
+```
+
+### Installment Data
+
+```{r installment data}
+#take differences prior to aggregation
+installment_data <- installment_data |>
+  mutate(
+    day_dif = days_instalment - days_entry_payment,  # Difference between due date and payment date
+    amt_dif = amt_instalment - amt_payment           # Difference between amount due and amount paid
+  )
+
+# 2905 rows have NAs, which shows they haven't actually made that payment
+colSums(is.na(installment_data[, c("day_dif", "amt_dif")]))
+summary(installment_data[, c("day_dif", "amt_dif")])
+
+# view head of data
+installment_data |>
+  filter(is.na(day_dif) | is.na(amt_dif)) |> head(10)
+
+# remove instalment amounts = to 0
+installment_data <- installment_data |>
+  filter(amt_instalment != 0)
+```
+
+```{r installment data continued}
+#below creates calculated fields before aggregation is performed
+
+# set day dif to how long hasn't been paid if no payment
+installment_data <- installment_data |> mutate(day_dif = ifelse(is.na(day_dif),days_instalment,day_dif))
+# set amt dif to how much is unpaid if no payment
+installment_data <- installment_data |> mutate(amt_dif = ifelse(is.na(amt_dif),amt_instalment,amt_dif))
+# get ratio of payment difference compared to payment due, flag if paid on time, flag if payment missed
+installment_data <- installment_data |> mutate(paid_ratio = amt_dif / amt_instalment,
+                                               paid_late = ifelse(day_dif <= 0, 1,0),
+                                               missed_payment = ifelse(paid_ratio == 1, 1, 0))
+#filter to only have needed columns
+installment_data <- installment_data |> select(sk_id_curr, day_dif, amt_dif, paid_ratio, paid_late, missed_payment)
+# positive day dif is early payment, 0 is ontime, negative is late
+```
+
+```{r installment data aggregation}
+#aggregate installment data
+installment_agg <- installment_data |>
+  group_by(sk_id_curr) |>
+  summarise(
+    in_n_installments = n(),
+    in_avg_day_dif = mean(day_dif, na.rm = TRUE),
+    in_min_day_dif = min(day_dif, na.rm = TRUE),
+    in_max_day_dif = max(day_dif, na.rm = TRUE),
+    in_avg_amt_dif = mean(amt_dif, na.rm = TRUE),
+    in_total_amt_dif = sum(amt_dif, na.rm = TRUE),
+    in_avg_paid_ratio = mean(paid_ratio, na.rm = TRUE),
+    in_share_paid_late = mean(paid_late, na.rm = TRUE),
+    in_share_missed_pmt = mean(missed_payment, na.rm = TRUE),
+    in_n_paid_late = sum(paid_late, na.rm = TRUE),
+    in_n_missed_pmt = sum(missed_payment, na.rm = TRUE),
+    .groups = "drop"
+  )
+#removes infinity values
+installment_agg <- installment_agg |> mutate(across(where(is.numeric), ~ ifelse(is.infinite(.x), NA_real_, .x)))
+#replace any remaining NA from aggregation with 0
+installment_agg <- installment_agg |>
+  mutate(across(where(is.numeric), ~ replace_na(.x, 0)))
+```
+
+### Credit Card Data
+
+```{r credit card data}
+#cleanup NAs
+credit_card_data <- credit_card_data |> 
+  mutate(AMT_PAYMENT_CURRENT = ifelse(is.na(AMT_PAYMENT_CURRENT),0,AMT_PAYMENT_CURRENT),
+         AMT_INST_MIN_REGULARITY =ifelse(is.na(AMT_INST_MIN_REGULARITY),0,AMT_INST_MIN_REGULARITY))
+
+# safe_division funciton to avoid Inf/Na when denominator is 0 or NA
+safe_div <- function(num, den) ifelse(is.na(den) | den <= 0, 0, num / den)
+
+#create additional columns
+credit_card_data <- credit_card_data |>
+  mutate(
+    util = safe_div(AMT_BALANCE, AMT_CREDIT_LIMIT_ACTUAL),
+    pay_vs_min = safe_div(AMT_PAYMENT_CURRENT, AMT_INST_MIN_REGULARITY),
+    pay_to_balance = safe_div(AMT_PAYMENT_TOTAL_CURRENT, AMT_BALANCE), 
+    is_delinquent = SK_DPD > 0,                                           
+    paid_min = AMT_INST_MIN_REGULARITY > 0 & AMT_PAYMENT_CURRENT >= AMT_INST_MIN_REGULARITY,
+    paid_full = AMT_BALANCE > 0 & AMT_PAYMENT_TOTAL_CURRENT >= AMT_BALANCE,      
+  )
+# check for any NAs
+#credit_card_data |>
+  #filter(if_any(everything(), is.na))
+```
+
+```{r credit card aggregation}
+# aggregated data set
+credit_card_agg <- credit_card_data |>
+  group_by(SK_ID_CURR) |>
+  summarise(
+    # time covered
+    cc_n_months            = n(),
+    cc_last_month          = max(MONTHS_BALANCE, na.rm = TRUE),
+    cc_span_months         = max(MONTHS_BALANCE, na.rm = TRUE) - 
+                          min(MONTHS_BALANCE, na.rm = TRUE),
+    # balances, limits, utilization
+    cc_avg_balance         = mean(AMT_BALANCE, na.rm = TRUE),
+    cc_max_balance         = max(AMT_BALANCE, na.rm = TRUE),
+    cc_avg_limit           = mean(AMT_CREDIT_LIMIT_ACTUAL, na.rm = TRUE),
+    cc_util_mean           = mean(util, na.rm = TRUE),
+    cc_util_max            = max(util, na.rm = TRUE),
+    # payments vs due
+    cc_pay_vs_min_mean     = mean(pay_vs_min, na.rm = TRUE),
+    cc_pay_to_balance_mean = mean(pay_to_balance, na.rm = TRUE),
+    # delinquency/behavior
+    cc_any_dpd             = any(is_delinquent, na.rm = TRUE),
+    cc_share_dpd           = mean(is_delinquent, na.rm = TRUE),
+    cc_max_dpd             = max(SK_DPD, na.rm = TRUE),
+    cc_share_paid_min      = mean(paid_min, na.rm = TRUE),
+    cc_share_paid_full     = mean(paid_full, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    across(where(is.numeric), ~ ifelse(is.infinite(.x), NA_real_, .x))
+  )
+#forgot to turn to lowercase initially so tidy up
+credit_card_agg <- credit_card_agg |>
+  rename_with(tolower)
+#check for any NA
+#credit_card_agg |>
+  #filter(if_any(everything(), is.na))
+```
+
+### POS Cash Balance
+
+```{r pos cash data}
+#cleanup NAs
+pos_cash_data <- pos_cash_data |> mutate(CNT_INSTALMENT = ifelse(is.na(CNT_INSTALMENT),0,CNT_INSTALMENT),
+                CNT_INSTALMENT_FUTURE = ifelse(is.na(CNT_INSTALMENT_FUTURE),0,CNT_INSTALMENT_FUTURE)
+)
+
+# create additional columns
+pos_cash_data <- pos_cash_data |>
+  mutate(
+    # paid and remaining ratios for installments
+    share_paid = safe_div(CNT_INSTALMENT - CNT_INSTALMENT_FUTURE, CNT_INSTALMENT),
+    share_remaining = safe_div(CNT_INSTALMENT_FUTURE, CNT_INSTALMENT),
+    # deliquencies 
+    is_dpd = SK_DPD > 0
+  )
+```
+
+```{r pos cash data agg}
+#create aggregation
+pos_cash_agg <- pos_cash_data |>
+  group_by(SK_ID_CURR) |>
+  summarise(
+    # duration of months
+    pos_n_months        = n(),
+    pos_last_month      = max(MONTHS_BALANCE, na.rm = TRUE),
+    pos_span_months     = pos_last_month - min(MONTHS_BALANCE, na.rm = TRUE),
+    # term and future ratios
+    pos_term_median     = median(CNT_INSTALMENT, na.rm = TRUE),
+    pos_term_max        = max(CNT_INSTALMENT, na.rm = TRUE),
+    pos_future_median   = median(CNT_INSTALMENT_FUTURE, na.rm = TRUE),
+    pos_future_min      = min(CNT_INSTALMENT_FUTURE, na.rm = TRUE),
+    # repayment progress ratios
+    pos_share_paid_mean = mean(share_paid, na.rm = TRUE),
+    pos_share_rem_mean  = mean(share_remaining, na.rm = TRUE),
+    # delinquency
+    pos_any_dpd         = any(is_dpd, na.rm = TRUE),
+    pos_share_dpd       = mean(is_dpd, na.rm = TRUE),
+    pos_max_dpd         = max(SK_DPD, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  # replace inf
+  mutate(across(where(is.numeric), ~ ifelse(is.infinite(.x), NA_real_, .x)))
+
+#check for any NA
+#pos_cash_agg |>
+  #filter(if_any(everything(), is.na))
+#forgot to turn to lowercase initially so tidy up
+pos_cash_agg <- pos_cash_agg |>
+  rename_with(tolower)
+```
+
+## Application Data Preperation
+
+### Feature Selection Missing Data and NAs
+
+Variables where greater than 50% of values were missing were dropped.
+The one exception was ext_source_1. A good portion of those dropped were
+related to those living in apartments and the characteristics of their
+housing.
+
+83 feature variables are retained.
+
+```{r drop missing data application}
+# % missing per variable (full dataset)
+missing_perc <- colMeans(is.na(hc_train))
+
+# Keep rule: ≤ 50% missing
+cols_to_keep <- names(missing_perc[missing_perc <= 0.50])
+
+# Exception: always keep EXT_SOURCE_1
+cols_final <- unique(c(cols_to_keep, "ext_source_1"))
+
+# Filter dataset
+hc_train <- hc_train |>
+  dplyr::select(all_of(cols_final))
+```
+
+### Outliers
+
+One outlier value has been identified and that is the highest income
+earner listed, this value is removed. Also the days employed uses an
+extreme value for place holding when a person is not employed, so this
+value is changed from 365,243 to 0.
+
+```{r remove outliers}
+#filter to remove incomes more than 100million
+hc_train |> filter(amt_income_total <= 100000000) -> hc_train
+#mutate days employed to 0 for positive values
+hc_train |> mutate(days_employed = ifelse(days_employed > 0,0,days_employed)) -> hc_train
+```
+
+### Joining Data
+
+At this point all five data sets were merged based on the customer id.
+To account for customers who were missing data points, which we would
+expect as we know customers don’t have information in each data set, we
+followed a basic approach for all independent variables. For each column
+a new column was created that was a flag that would indicate if data for
+that variable was missing for a given client, this way information about
+missing data was retained as this in and of itself is likely predictive.
+Next imputation was performed for all missing data points; a median
+value was used for numeric variables and modal values for non-numeric.
+For numeric data they were all scaled and centered, as several different
+modeling approaches explored are sensitive to scale differences. These
+data transformation steps led to a high dimensionality of data, this
+along with numeric scaling make challenges in creating an interpretable
+model, but this trade off was made given that most of the models
+explored in the future will be black box, so interpretability will
+already be lost.
+
+```{r merge data}
+#join data
+hc_merged <- hc_train |> left_join(bureau_agg, by = "sk_id_curr")
+hc_merged <- hc_merged |> left_join(installment_agg, by = "sk_id_curr")
+hc_merged <- hc_merged |> left_join(credit_card_agg, by = "sk_id_curr")
+hc_merged <- hc_merged |> left_join(pos_cash_agg, by = "sk_id_curr")
+```
+
+### Training and Test Partions
+
+Data is split into a 80/20 train/test partition split. The 20% holdout
+data will only be used at the end for evaluating the estimated metrics
+and performance of the chosen model. Which model is used will be
+determined based on cross validation of the 80% training split data.
+
+```{r create partition }
+set.seed(61)
+#create data partition index
+index <- createDataPartition(y = hc_merged$target, p = 0.8, list = FALSE)
+#create split data frames
+train_hc_merged <- hc_merged[index,]
+holdout_hc_merged <- hc_merged[-index,] # do not use at all - only for very last run once model picked
+
+#use data set without home credit or bureau data to identify predictive power
+default_split <- createDataPartition(y = hc_train$target, p = 0.8, list = FALSE)
+#create split data frames
+train_hc_train <- hc_train[default_split,]
+holdout_hc_train <- hc_train[-default_split,]
+
+```
+
+### Missing Data Imputation and Log Scaling
+
+Imputation of missing values and NAs is done last after data is all
+joined and split to avoid leakage. Income is log transformed due to it's
+heavy right skew. Modal values are imputed for categorical, median for
+numeric. Finally numeric data is scaled to account for certain models
+being sensitive to magnitude differences of variables. One additional
+item to note the median and modal values are calculated and retained
+from the training data, so for future predictions on holdout and test
+data these values are used for imputation.
+
+A data cleaning recipe is created that can be used on all test and
+training data. For training data an additional recipe is used that
+creates upsampled and downsampled data set for use. Because in the
+training data is there is a large amount of class imbalance with only
+\~8% of observations belonging to the minority class. For this reason,
+additional data sets were generated that used all the prior
+transformations but as a final step were up and down sampled to have
+more balance. For both we used a 2 to 1 ratio or two cases of majority
+class for each case in minority class.
+
+```{r recipe creation}
+#recipe for data cleaning - to be used on all future data sets
+rec <- recipe(target ~ ., data = train_hc_merged) |>
+  update_role(sk_id_curr, new_role = "id") |> # set so ID doesn't get touched
+  step_zv(all_predictors()) |>                # remove zero variance predictors
+  
+  # Flag NAs before anything else
+  step_indicate_na(all_predictors()) |>
+  
+  # Convert logicals → numeric (0/1) so imputation will handle them
+  step_mutate(across(where(is.logical), as.integer)) |>
+  
+  # Optional: sanitize numeric columns — replace Inf/-Inf/NaN with NA
+  step_mutate(across(where(is.numeric), ~ ifelse(is.finite(.), ., NA_real_))) |>
+  
+  # Impute missing values (now covers numeric + logicals)
+  step_impute_median(all_numeric_predictors()) |>
+  step_impute_mode(all_nominal_predictors()) |>
+  
+  # Safe log transform (no negatives)
+  step_mutate(amt_income_total = log1p(pmax(amt_income_total, 0))) |>
+  
+  # Normalize numeric predictors (except NA indicator flags)
+  step_normalize(all_numeric_predictors(), -starts_with("na_ind_")) |>
+  
+  # Encode categoricals as one-hot
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) |>
+  
+  # Final cleanup of zero variance columns post-dummying
+  step_zv(all_predictors())
+
+# -- recipe for just application train data ---
+#recipe for data cleaning - to be used on all future data sets
+rec_train <- recipe(target ~ ., data = train_hc_train) |>
+  update_role(sk_id_curr, new_role = "id") |> # set so ID doesn't get touched
+  step_zv(all_predictors()) |>                # remove zero variance predictors
+  
+  # Flag NAs before anything else
+  step_indicate_na(all_predictors()) |>
+  
+  # Convert logicals → numeric (0/1) so imputation will handle them
+  step_mutate(across(where(is.logical), as.integer)) |>
+  
+  # Optional: sanitize numeric columns — replace Inf/-Inf/NaN with NA
+  step_mutate(across(where(is.numeric), ~ ifelse(is.finite(.), ., NA_real_))) |>
+  
+  # Impute missing values (now covers numeric + logicals)
+  step_impute_median(all_numeric_predictors()) |>
+  step_impute_mode(all_nominal_predictors()) |>
+  
+  # Safe log transform (no negatives)
+  step_mutate(amt_income_total = log1p(pmax(amt_income_total, 0))) |>
+  
+  # Normalize numeric predictors (except NA indicator flags)
+  step_normalize(all_numeric_predictors(), -starts_with("na_ind_")) |>
+  
+  # Encode categoricals as one-hot
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) |>
+  
+  # Final cleanup of zero variance columns post-dummying
+  step_zv(all_predictors())
+```
+
+```{r over sample recipe}
+# baseline recipe for no over sampling
+rec_base  <- rec
+#recipe for oversampling - adds oversampling at the end of data prep
+rec_over_sample <- rec |> step_upsample(target, over_ratio = 0.5, skip = TRUE)
+#recipe for downsample 
+rec_down_sample <- rec |>
+  step_downsample(target, under_ratio = 2, skip = TRUE)
+
+# baseline recipe for no over sampling -- train data
+rec_base_train  <- rec_train
+#recipe for oversampling - adds oversampling at the end of data prep
+rec_over_sample_train <- rec_train |> step_upsample(target, over_ratio = 0.5, skip = TRUE)
+#recipe for downsample 
+rec_down_sample_train <- rec_train |>
+  step_downsample(target, under_ratio = 2, skip = TRUE)
+```
+
+```{r apply recipe to data}
+#train recipe on training data split
+prep_base <- prep(rec_base, training = train_hc_merged, verbose = FALSE)
+#prep_over <- prep(rec_over_sample, training = train_hc_merged, verbose = FALSE)
+prep_down <- prep(rec_down_sample, training = train_hc_merged, verbose = FALSE)
+#create data frames
+x_train_base <- juice(prep_base)
+#x_train_over_sample <- juice(prep_over)
+x_train_down_sample <- juice(prep_down)
+
+# -- training data ---
+#train recipe on training data split
+prep_base_train <- prep(rec_base_train, training = train_hc_merged, verbose = FALSE)
+#prep_over_train <- prep(rec_over_sample_train, training = train_hc_merged, verbose = FALSE)
+prep_down_train <- prep(rec_down_sample_train, training = train_hc_merged, verbose = FALSE)
+#create data frames
+x_train_base_train <- juice(prep_base_train)
+#x_train_over_sample_train <- juice(prep_over_train)
+x_train_down_sample_train <- juice(prep_down_train)
+```
+
+## Neural Network Base Model
+
+```{r nn base model}
+#define hyperparameters
+nnet_base_spec <-
+  mlp(epochs = 1000, hidden_units = 32, penalty = 0, learn_rate = 0.001) |>
+  set_engine("brulee", validation = 0.2, optimizer = "ADAMw", batch_size = 1024, stop_iter = 20, verbose = TRUE) |>
+  set_mode("classification")
+
+#define workflow
+nnet_base_wflow <-
+  rec |>
+  workflow(nnet_base_spec)
+
+#train model
+with_device(device = "MPS", {
+set.seed(123)
+nnet_base_fit <- fit(nnet_base_wflow, train_hc_merged) })
+
+nnet_base_fit |>
+  extract_fit_engine()
+```
+
+```{r nn hyperparam grid search}
+set.seed(123)
+
+# --- 1) Folds (stratified) ---
+folds <- vfold_cv(train_hc_merged, v = 5, strata = target)
+
+# --- 2) Model spec with tunables ---
+mlp_spec_tune <-
+   mlp(
+    mode         = "classification",
+    epochs       = 1000,
+   hidden_units = tune(),
+    dropout      = tune(),
+    penalty      = 0,           # keep 0 based on your earlier results
+    learn_rate   = tune()
+  ) |>
+  set_engine(
+    "brulee",
+    optimizer  = "ADAMw",
+    validation = 0.20,
+    batch_size = 1024,          # keep fixed here; can try 512 later
+    stop_iter  = 20,
+    verbose    = TRUE
+  )
+
+# --- 3) Workflow ---
+wf_tune <- workflow() |>
+  add_recipe(rec) |>
+  add_model(mlp_spec_tune)
+
+# --- 4) Manual grid (27 combos) ---
+grid_small <- crossing(
+  hidden_units = c(32L, 64L, 128L),
+  dropout = c(0, 0.10, 0.20),
+  learn_rate = c(1e-3, 5e-4, 2e-4)
+)
+
+# --- 5) Grid search (optimize ROC AUC to avoid event-level gotchas) ---
+tuned <- tune_grid(
+  wf_tune,
+  resamples = folds,
+  grid = grid_small,
+  metrics = metric_set(roc_auc),
+  control = control_grid(save_pred = TRUE)
+)
+
+# Top results
+tuned %>%
+  collect_metrics() %>%
+  arrange(desc(mean)) %>%
+  slice_head(n = 10)
+
+best_params <- select_best(tuned, metric = "roc_auc")
+best_params
+
+# --- 6) Lock in best params and re-run CV to save OOF preds for positive-class metrics ---
+
+final_wf <- finalize_workflow(wf_tune, best_params)
+
+cv_best <- fit_resamples(
+  final_wf,
+  resamples = folds,
+  metrics = metric_set(roc_auc),
+  control = control_resamples(save_pred = TRUE)
+)
+
+# --- 7) Compute POSITIVE-class metrics from saved OOF predictions ---
+preds <- collect_predictions(cv_best)
+preds2 <- preds |>
+  transmute(
+    truth = fct_relevel(target, "0", "1"),
+    p0 = as.numeric(.pred_0),
+    p1 = as.numeric(.pred_1)
+  )
+
+# Positive-class ("1") metrics
+roc_auc_base <- roc_auc(preds2, truth = truth, p1, event_level = "second") |> pull(.estimate)
+pr_auc_base <- pr_auc(preds2, truth = truth, p1, event_level = "second") |> pull(.estimate)
+mn_log_loss_base <- mn_log_loss(preds2, truth = truth, p1, event_level = "second") |> pull(.estimate)
+
+# Brier:
+brier_class_base <- brier_class(preds2, truth = truth, p0) %>% pull(.estimate)
+
+tibble(
+  metric = c("ROC_AUC", "PR_AUC", "MN Log Loss", "Brier Class"),
+  value = c(roc_auc_base, pr_auc_base, mn_log_loss_base, brier_class_base)
+) |>
+  knitr::kable(col.names = c("Metric", "Value"), caption = "Base NN Metrics")
+```
+
+### Neural Network Interpretation
+
+A neural network was trained on the data set with the base class
+imbalance and set to optimize hyper parameters using grid search to
+maximize ROC-AUC, the best model had a \~.77 ROC-AUC, but only \~ .24
+PR-AUC. This indicates the model has low precision and is not good at
+predicting positives. This is likely due to the neural network being
+more sensitive in training a model to the class imbalance.
+
+```{r nn model eval}
+# Step 1: Load the saved model
+#nn_model_workflow <- readRDS("models/final_nn_model.rds")
+
+# Step 2: Load kaggle data
+#new_data <- readr::read_csv("data/new_data.csv")
+
+# Step 3: Run predictions
+#predictions <- predict(nn_model_workflow, new_data)
