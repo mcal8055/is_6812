@@ -154,7 +154,7 @@ The gradient boosting solution creates value by:
 
 In addition to contributing to overall project discussions and documentation, my main responsibilities were:
 
-### 1. Modeling R&D Around Complex Learners
+### Modeling R&D Around Complex Learners
 
 - Implemented and tuned **neural network models** using `brulee` on the engineered feature set.
 - Designed and ran grid searches over:
@@ -164,16 +164,3 @@ In addition to contributing to overall project discussions and documentation, my
 - Evaluated neural network performance against gradient boosting to understand:
   - Where deep learning might add value
   - When it becomes **computationally expensive** without clear gains
-
-### 2. Ensemble (Stacking) Scaffold
-
-- Built a **stacked ensemble** using `caret` that combined:
-  - The XGBoost model  
-  - The neural network  
-  - A logistic regression meta-model on top (`caretStack`)
-- Addressed compute constraints by:
-  - Sub-sampling the training data
-  - Reducing the number of CV folds
-  - Simplifying neural net architecture  
-- Showed empirically that, under our hardware and time constraints, the ensemble **did not materially outperform** the standalone XGBoost model in ROC-AUC or PR-AUC.
----
