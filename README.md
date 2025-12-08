@@ -85,7 +85,7 @@ Performance was assessed via **stratified cross-validation** and a **strict hold
 
 ## Model Performance & Business Impact
 
-### Holdout Performance (Threshold = 0.5)
+### Holdout Performance
 
 On the internal holdout set, our chosen XGBoost model achieved approximately:
 
