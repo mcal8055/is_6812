@@ -166,5 +166,5 @@ In addition to contributing to overall project discussions and documentation, my
   - When it becomes **computationally expensive** without clear gains
  
 ## Repository Guide
-- 'EDA.rmd' - initial exploratory data notebook
-- 'recipe_nn.rmd' - Neural network code with necessary recipe prep code
+- `EDA.rmd` - initial exploratory data notebook
+- `recipe_nn.rmd` - Neural network code with necessary recipe prep code
