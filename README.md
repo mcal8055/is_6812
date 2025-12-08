@@ -167,4 +167,4 @@ In addition to contributing to overall project discussions and documentation, my
  
 ## Repository Guide
 - `EDA.rmd` - initial exploratory data notebook
-- `recipe_nn.rmd` - Neural network code with necessary recipe prep code
+- `recipe_nn.rmd` - Neural network code with necessary recipe prep
